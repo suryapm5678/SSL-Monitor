@@ -1,0 +1,278 @@
+name: SSL Certificate Monitor
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+
+  workflow_dispatch:
+
+jobs:
+  check-ssl:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ==========================================================
+      # CHECK SSL CERTIFICATE
+      # ==========================================================
+      - name: Check SSL certificate
+        id: sslcheck
+        shell: bash
+        run: |
+
+          DOMAIN="app.cmercury.com"
+          EXPECTED_DOMAIN="app.cmercury.com"
+          EXPECTED_CERT="*.cmercury.com"
+          SERVER_IP="208.100.49.130"
+
+          echo "=========================================="
+          echo "SSL CERTIFICATE MONITOR"
+          echo "=========================================="
+          echo "Domain       : $DOMAIN"
+          echo "Server IP    : $SERVER_IP"
+          echo "Expected     : $EXPECTED_CERT"
+          echo "=========================================="
+
+          CERT_FILE=$(mktemp)
+
+          # Get the certificate actually presented by the public server
+          echo | openssl s_client \
+            -connect "${DOMAIN}:443" \
+            -servername "${DOMAIN}" \
+            -showcerts 2>/dev/null \
+            | openssl x509 -out "$CERT_FILE"
+
+          # ------------------------------------------------------
+          # Certificate could not be retrieved
+          # ------------------------------------------------------
+
+          if [ ! -s "$CERT_FILE" ]; then
+
+            echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
+
+            echo "SSL_ALERT_TYPE=SSL Connection Failed" >> "$GITHUB_ENV"
+
+            echo "SSL_MESSAGE=Unable to retrieve SSL certificate from ${DOMAIN}:443." >> "$GITHUB_ENV"
+
+            echo "SSL_SUBJECT=Certificate unavailable" >> "$GITHUB_ENV"
+
+            echo "SSL_ISSUER=Unknown" >> "$GITHUB_ENV"
+
+            echo "SSL_EXPIRY=Unknown" >> "$GITHUB_ENV"
+
+            echo ""
+            echo "ERROR: SSL certificate could not be retrieved."
+
+            exit 0
+          fi
+
+          # ------------------------------------------------------
+          # Get certificate information
+          # ------------------------------------------------------
+
+          SUBJECT=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -subject | sed 's/^subject=//')
+
+          ISSUER=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -issuer | sed 's/^issuer=//')
+
+          EXPIRY=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -enddate | cut -d= -f2)
+
+          NOT_BEFORE=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -startdate | cut -d= -f2)
+
+          SERIAL=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -serial | cut -d= -f2)
+
+          SAN=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -ext subjectAltName 2>/dev/null || true)
+
+          echo ""
+          echo "CERTIFICATE DETAILS"
+          echo "------------------------------------------"
+          echo "Subject     : $SUBJECT"
+          echo "Issuer      : $ISSUER"
+          echo "Valid From  : $NOT_BEFORE"
+          echo "Valid Until : $EXPIRY"
+          echo "Serial      : $SERIAL"
+          echo ""
+          echo "SAN:"
+          echo "$SAN"
+          echo "------------------------------------------"
+
+          # Export information for email
+          {
+            echo "SSL_SUBJECT=$SUBJECT"
+            echo "SSL_ISSUER=$ISSUER"
+            echo "SSL_EXPIRY=$EXPIRY"
+            echo "SSL_NOT_BEFORE=$NOT_BEFORE"
+            echo "SSL_SERIAL=$SERIAL"
+          } >> "$GITHUB_ENV"
+
+          # ------------------------------------------------------
+          # Check certificate expiry
+          # ------------------------------------------------------
+
+          if ! openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -checkend 0 >/dev/null 2>&1; then
+
+            echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
+
+            echo "SSL_ALERT_TYPE=SSL Certificate Expired" >> "$GITHUB_ENV"
+
+            echo "SSL_MESSAGE=The SSL certificate for ${DOMAIN} has expired." >> "$GITHUB_ENV"
+
+            echo ""
+            echo "=========================================="
+            echo "SSL CERTIFICATE EXPIRED"
+            echo "=========================================="
+
+            exit 0
+          fi
+
+          # ------------------------------------------------------
+          # Check hostname
+          # ------------------------------------------------------
+
+          openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -checkhost "$EXPECTED_DOMAIN"
+
+          HOST_CHECK=$?
+
+          # ------------------------------------------------------
+          # Wrong certificate
+          # ------------------------------------------------------
+
+          if [ "$HOST_CHECK" -ne 0 ]; then
+
+            echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
+
+            echo "SSL_ALERT_TYPE=Wrong SSL Certificate" >> "$GITHUB_ENV"
+
+            echo "SSL_MESSAGE=The certificate presented by ${DOMAIN} does not match ${EXPECTED_DOMAIN}." >> "$GITHUB_ENV"
+
+            echo ""
+            echo "=========================================="
+            echo "SSL CERTIFICATE ALERT"
+            echo "=========================================="
+            echo "Domain              : $DOMAIN"
+            echo "Expected Certificate: $EXPECTED_CERT"
+            echo "Actual Certificate  : $SUBJECT"
+            echo "Issuer              : $ISSUER"
+            echo "Expiry              : $EXPIRY"
+            echo "=========================================="
+
+            exit 0
+          fi
+
+          # ------------------------------------------------------
+          # Certificate is valid
+          # ------------------------------------------------------
+
+          echo "SSL_CHECK_FAILED=false" >> "$GITHUB_ENV"
+
+          echo "SSL_ALERT_TYPE=SSL Certificate OK" >> "$GITHUB_ENV"
+
+          echo "SSL_MESSAGE=SSL certificate is valid and matches ${DOMAIN}." >> "$GITHUB_ENV"
+
+          echo ""
+          echo "=========================================="
+          echo "SSL CERTIFICATE OK"
+          echo "=========================================="
+          echo "Domain      : $DOMAIN"
+          echo "Certificate : $SUBJECT"
+          echo "Issuer      : $ISSUER"
+          echo "Expiry      : $EXPIRY"
+          echo "=========================================="
+
+
+      # ==========================================================
+      # SEND EMAIL ALERT
+      # ==========================================================
+      - name: Send SSL alert email
+        if: env.SSL_CHECK_FAILED == 'true'
+        uses: dawidd6/action-send-mail@v8
+        with:
+
+          server_address: ${{ secrets.SMTP_HOST }}
+
+          server_port: ${{ secrets.SMTP_PORT }}
+
+          username: ${{ secrets.SMTP_USER }}
+
+          password: ${{ secrets.SMTP_PASSWORD }}
+
+          subject: "SSL ALERT - app.cmercury.com"
+
+          to: ${{ secrets.ALERT_EMAIL }}
+
+          from: "cmercury Support <alert@cmercury.com>"
+
+          body: |
+            ==========================================
+            SSL CERTIFICATE ALERT
+            ==========================================
+
+            Domain:
+            app.cmercury.com
+
+            Server IP:
+            208.100.49.130
+
+            Alert:
+            ${{ env.SSL_ALERT_TYPE }}
+
+            Message:
+            ${{ env.SSL_MESSAGE }}
+
+            ------------------------------------------
+
+            Certificate Subject:
+            ${{ env.SSL_SUBJECT }}
+
+            Certificate Issuer:
+            ${{ env.SSL_ISSUER }}
+
+            Certificate Valid From:
+            ${{ env.SSL_NOT_BEFORE }}
+
+            Certificate Valid Until:
+            ${{ env.SSL_EXPIRY }}
+
+            Certificate Serial:
+            ${{ env.SSL_SERIAL }}
+
+            ------------------------------------------
+
+            Expected hostname:
+            app.cmercury.com
+
+            Expected certificate:
+            *.cmercury.com
+
+            ------------------------------------------
+
+            ACTION REQUIRED:
+
+            Please check the IIS HTTPS/SNI bindings
+            and SSL certificate configuration.
+
+            ==========================================
+            cmercury Support
