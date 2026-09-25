@@ -48,7 +48,7 @@ jobs:
 
           if [ ! -s "$CERT_FILE" ]; then
 
-            echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
+            echo "=true" >> "$GITHUB_ENV"
             echo "SSL_ALERT_TYPE=SSL Connection Failed" >> "$GITHUB_ENV"
             echo "SSL_MESSAGE=Unable to retrieve SSL certificate from ${DOMAIN}:443." >> "$GITHUB_ENV"
 
@@ -121,7 +121,7 @@ jobs:
             -noout \
             -checkend 0 >/dev/null 2>&1; then
 
-            echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
+            echo "=true" >> "$GITHUB_ENV"
             echo "SSL_ALERT_TYPE=SSL Certificate Expired" >> "$GITHUB_ENV"
             echo "SSL_MESSAGE=The SSL certificate for ${DOMAIN} has expired." >> "$GITHUB_ENV"
 
@@ -150,7 +150,7 @@ jobs:
 
           if [ "$HOST_CHECK" -ne 0 ]; then
 
-            echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
+            echo "=true" >> "$GITHUB_ENV"
 
             echo "SSL_ALERT_TYPE=Wrong SSL Certificate" >> "$GITHUB_ENV"
 
@@ -174,7 +174,7 @@ jobs:
           # Certificate is valid
           # ------------------------------------------------------
 
-          echo "SSL_CHECK_FAILED=false" >> "$GITHUB_ENV"
+          echo "=false" >> "$GITHUB_ENV"
 
           echo "SSL_ALERT_TYPE=SSL Certificate OK" >> "$GITHUB_ENV"
 
@@ -195,7 +195,7 @@ jobs:
       # SEND EMAIL ALERT
       # ==========================================================
       - name: Send SSL alert email
-        if: env.SSL_CHECK_FAILED == 'true'
+        if: env.SSL_CHECK_FAILED == 'false'
         uses: dawidd6/action-send-mail@v18
 
         with:
