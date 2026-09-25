@@ -165,7 +165,7 @@ jobs:
       # ============================================================
 
       - name: Send SSL Alert through EmailJS
-        if: always()
+        if: env.SSL_CHECK_FAILED == 'true'
         shell: bash
         run: |
 
