@@ -207,7 +207,7 @@ jobs:
       # SEND EMAIL ALERT
       # ==========================================================
       - name: Send SSL alert email
-        if: env.SSL_CHECK_FAILED == 'true'
+        if: env.SSL_CHECK_FAILED == 'false'
         uses: dawidd6/action-send-mail@v8
         with:
 
