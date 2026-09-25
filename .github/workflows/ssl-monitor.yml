@@ -49,16 +49,14 @@ jobs:
           if [ ! -s "$CERT_FILE" ]; then
 
             echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
-
             echo "SSL_ALERT_TYPE=SSL Connection Failed" >> "$GITHUB_ENV"
-
             echo "SSL_MESSAGE=Unable to retrieve SSL certificate from ${DOMAIN}:443." >> "$GITHUB_ENV"
 
             echo "SSL_SUBJECT=Certificate unavailable" >> "$GITHUB_ENV"
-
             echo "SSL_ISSUER=Unknown" >> "$GITHUB_ENV"
-
             echo "SSL_EXPIRY=Unknown" >> "$GITHUB_ENV"
+            echo "SSL_NOT_BEFORE=Unknown" >> "$GITHUB_ENV"
+            echo "SSL_SERIAL=Unknown" >> "$GITHUB_ENV"
 
             echo ""
             echo "ERROR: SSL certificate could not be retrieved."
@@ -95,11 +93,6 @@ jobs:
             -noout \
             -serial | cut -d= -f2)
 
-          SAN=$(openssl x509 \
-            -in "$CERT_FILE" \
-            -noout \
-            -ext subjectAltName 2>/dev/null || true)
-
           echo ""
           echo "CERTIFICATE DETAILS"
           echo "------------------------------------------"
@@ -108,12 +101,9 @@ jobs:
           echo "Valid From  : $NOT_BEFORE"
           echo "Valid Until : $EXPIRY"
           echo "Serial      : $SERIAL"
-          echo ""
-          echo "SAN:"
-          echo "$SAN"
           echo "------------------------------------------"
 
-          # Export information for email
+          # Save certificate information for email
           {
             echo "SSL_SUBJECT=$SUBJECT"
             echo "SSL_ISSUER=$ISSUER"
@@ -132,9 +122,7 @@ jobs:
             -checkend 0 >/dev/null 2>&1; then
 
             echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
-
             echo "SSL_ALERT_TYPE=SSL Certificate Expired" >> "$GITHUB_ENV"
-
             echo "SSL_MESSAGE=The SSL certificate for ${DOMAIN} has expired." >> "$GITHUB_ENV"
 
             echo ""
@@ -172,11 +160,11 @@ jobs:
             echo "=========================================="
             echo "SSL CERTIFICATE ALERT"
             echo "=========================================="
-            echo "Domain              : $DOMAIN"
-            echo "Expected Certificate: $EXPECTED_CERT"
-            echo "Actual Certificate  : $SUBJECT"
-            echo "Issuer              : $ISSUER"
-            echo "Expiry              : $EXPIRY"
+            echo "Domain               : $DOMAIN"
+            echo "Expected Certificate : $EXPECTED_CERT"
+            echo "Actual Certificate   : $SUBJECT"
+            echo "Issuer               : $ISSUER"
+            echo "Expiry               : $EXPIRY"
             echo "=========================================="
 
             exit 0
@@ -207,24 +195,34 @@ jobs:
       # SEND EMAIL ALERT
       # ==========================================================
       - name: Send SSL alert email
-        if: env.SSL_CHECK_FAILED == 'false'
-        uses: dawidd6/action-send-mail@v8
+        if: env.SSL_CHECK_FAILED == 'true'
+        uses: dawidd6/action-send-mail@v18
+
         with:
 
+          # SMTP server
           server_address: ${{ secrets.SMTP_HOST }}
 
+          # SMTP port
           server_port: ${{ secrets.SMTP_PORT }}
 
-          username: ${{ secrets.SMTP_USER }}
+          # Plain SMTP - no implicit TLS
+          secure: false
 
+          # SMTP authentication
+          username: ${{ secrets.SMTP_USER }}
           password: ${{ secrets.SMTP_PASSWORD }}
 
+          # Email subject
           subject: "SSL ALERT - app.cmercury.com"
 
+          # Recipient
           to: ${{ secrets.ALERT_EMAIL }}
 
+          # Sender
           from: "cmercury Support <alert@cmercury.com>"
 
+          # Email body
           body: |
             ==========================================
             SSL CERTIFICATE ALERT
