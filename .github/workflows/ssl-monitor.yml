@@ -2,8 +2,10 @@ name: SSL Certificate Monitor
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    # Temporary test: run every 5 minutes
+    - cron: "*/5 * * * *"
 
+  # Allows manual testing
   workflow_dispatch:
 
 jobs:
@@ -35,27 +37,36 @@ jobs:
 
           CERT_FILE=$(mktemp)
 
-          # Get the certificate actually presented by the public server
+          # ======================================================
+          # Get the certificate actually presented by the server
+          # ======================================================
+
           echo | openssl s_client \
             -connect "${DOMAIN}:443" \
             -servername "${DOMAIN}" \
             -showcerts 2>/dev/null \
             | openssl x509 -out "$CERT_FILE"
 
-          # ------------------------------------------------------
+          # ======================================================
           # Certificate could not be retrieved
-          # ------------------------------------------------------
+          # ======================================================
 
           if [ ! -s "$CERT_FILE" ]; then
 
-            echo "=true" >> "$GITHUB_ENV"
+            echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
+
             echo "SSL_ALERT_TYPE=SSL Connection Failed" >> "$GITHUB_ENV"
+
             echo "SSL_MESSAGE=Unable to retrieve SSL certificate from ${DOMAIN}:443." >> "$GITHUB_ENV"
 
             echo "SSL_SUBJECT=Certificate unavailable" >> "$GITHUB_ENV"
+
             echo "SSL_ISSUER=Unknown" >> "$GITHUB_ENV"
+
             echo "SSL_EXPIRY=Unknown" >> "$GITHUB_ENV"
+
             echo "SSL_NOT_BEFORE=Unknown" >> "$GITHUB_ENV"
+
             echo "SSL_SERIAL=Unknown" >> "$GITHUB_ENV"
 
             echo ""
@@ -64,9 +75,9 @@ jobs:
             exit 0
           fi
 
-          # ------------------------------------------------------
+          # ======================================================
           # Get certificate information
-          # ------------------------------------------------------
+          # ======================================================
 
           SUBJECT=$(openssl x509 \
             -in "$CERT_FILE" \
@@ -103,26 +114,29 @@ jobs:
           echo "Serial      : $SERIAL"
           echo "------------------------------------------"
 
+          # ======================================================
           # Save certificate information for email
-          {
-            echo "SSL_SUBJECT=$SUBJECT"
-            echo "SSL_ISSUER=$ISSUER"
-            echo "SSL_EXPIRY=$EXPIRY"
-            echo "SSL_NOT_BEFORE=$NOT_BEFORE"
-            echo "SSL_SERIAL=$SERIAL"
-          } >> "$GITHUB_ENV"
+          # ======================================================
 
-          # ------------------------------------------------------
+          echo "SSL_SUBJECT=$SUBJECT" >> "$GITHUB_ENV"
+          echo "SSL_ISSUER=$ISSUER" >> "$GITHUB_ENV"
+          echo "SSL_EXPIRY=$EXPIRY" >> "$GITHUB_ENV"
+          echo "SSL_NOT_BEFORE=$NOT_BEFORE" >> "$GITHUB_ENV"
+          echo "SSL_SERIAL=$SERIAL" >> "$GITHUB_ENV"
+
+          # ======================================================
           # Check certificate expiry
-          # ------------------------------------------------------
+          # ======================================================
 
           if ! openssl x509 \
             -in "$CERT_FILE" \
             -noout \
             -checkend 0 >/dev/null 2>&1; then
 
-            echo "=true" >> "$GITHUB_ENV"
+            echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
+
             echo "SSL_ALERT_TYPE=SSL Certificate Expired" >> "$GITHUB_ENV"
+
             echo "SSL_MESSAGE=The SSL certificate for ${DOMAIN} has expired." >> "$GITHUB_ENV"
 
             echo ""
@@ -133,9 +147,9 @@ jobs:
             exit 0
           fi
 
-          # ------------------------------------------------------
+          # ======================================================
           # Check hostname
-          # ------------------------------------------------------
+          # ======================================================
 
           openssl x509 \
             -in "$CERT_FILE" \
@@ -144,13 +158,13 @@ jobs:
 
           HOST_CHECK=$?
 
-          # ------------------------------------------------------
+          # ======================================================
           # Wrong certificate
-          # ------------------------------------------------------
+          # ======================================================
 
           if [ "$HOST_CHECK" -ne 0 ]; then
 
-            echo "=true" >> "$GITHUB_ENV"
+            echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
 
             echo "SSL_ALERT_TYPE=Wrong SSL Certificate" >> "$GITHUB_ENV"
 
@@ -170,11 +184,11 @@ jobs:
             exit 0
           fi
 
-          # ------------------------------------------------------
-          # Certificate is valid
-          # ------------------------------------------------------
+          # ======================================================
+          # Certificate is correct
+          # ======================================================
 
-          echo "=false" >> "$GITHUB_ENV"
+          echo "SSL_CHECK_FAILED=false" >> "$GITHUB_ENV"
 
           echo "SSL_ALERT_TYPE=SSL Certificate OK" >> "$GITHUB_ENV"
 
@@ -192,10 +206,21 @@ jobs:
 
 
       # ==========================================================
-      # SEND EMAIL ALERT
+      # SEND TEST EMAIL
+      #
+      # TEMPORARY:
+      # always() means email is sent even when SSL is OK.
+      #
+      # AFTER TESTING:
+      # Change:
+      #     if: always()
+      #
+      # To:
+      #     if: env.SSL_CHECK_FAILED == 'true'
       # ==========================================================
-      - name: Send SSL alert email
-        if: env.SSL_CHECK_FAILED == 'false'
+
+      - name: Send SSL test email
+        if: always()
         uses: dawidd6/action-send-mail@v18
 
         with:
@@ -206,15 +231,16 @@ jobs:
           # SMTP port
           server_port: ${{ secrets.SMTP_PORT }}
 
-          # Plain SMTP - no implicit TLS
+          # Your SMTP is configured for plain port 25
           secure: false
 
           # SMTP authentication
           username: ${{ secrets.SMTP_USER }}
+
           password: ${{ secrets.SMTP_PASSWORD }}
 
           # Email subject
-          subject: "SSL ALERT - app.cmercury.com"
+          subject: "SSL TEST - app.cmercury.com"
 
           # Recipient
           to: ${{ secrets.ALERT_EMAIL }}
@@ -225,7 +251,7 @@ jobs:
           # Email body
           body: |
             ==========================================
-            SSL CERTIFICATE ALERT
+            SSL CERTIFICATE MONITOR TEST
             ==========================================
 
             Domain:
@@ -234,7 +260,7 @@ jobs:
             Server IP:
             208.100.49.130
 
-            Alert:
+            SSL Check Result:
             ${{ env.SSL_ALERT_TYPE }}
 
             Message:
@@ -267,10 +293,16 @@ jobs:
 
             ------------------------------------------
 
-            ACTION REQUIRED:
+            This is a temporary TEST email.
 
-            Please check the IIS HTTPS/SNI bindings
-            and SSL certificate configuration.
+            Once email delivery is confirmed,
+            change:
+
+            if: always()
+
+            to:
+
+            if: env.SSL_CHECK_FAILED == 'true'
 
             ==========================================
             cmercury Support
