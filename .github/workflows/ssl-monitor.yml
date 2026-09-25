@@ -2,7 +2,10 @@ name: SSL Certificate Monitor
 
 on:
   schedule:
+    # Run every 5 minutes
     - cron: "*/5 * * * *"
+
+  # Allows manual testing from GitHub Actions
   workflow_dispatch:
 
 jobs:
@@ -10,6 +13,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
+      # ============================================================
+      # 1. CHECK SSL CERTIFICATE
+      # ============================================================
       - name: Check SSL certificate
         shell: bash
         run: |
@@ -19,28 +26,67 @@ jobs:
 
           CERT_FILE=$(mktemp)
 
+          echo "=========================================="
+          echo "SSL CERTIFICATE CHECK"
+          echo "=========================================="
+          echo "Domain: $DOMAIN"
+          echo "Server IP: $SERVER_IP"
+          echo ""
+
+          # Retrieve the public certificate using SNI
           echo | openssl s_client \
             -connect "${DOMAIN}:443" \
             -servername "${DOMAIN}" \
             -showcerts 2>/dev/null \
             | openssl x509 -out "$CERT_FILE"
 
+          # --------------------------------------------------------
+          # Certificate could not be retrieved
+          # --------------------------------------------------------
           if [ ! -s "$CERT_FILE" ]; then
+
             echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
             echo "SSL_ALERT_TYPE=SSL Connection Failed" >> "$GITHUB_ENV"
             echo "SSL_MESSAGE=Unable to retrieve SSL certificate from ${DOMAIN}:443." >> "$GITHUB_ENV"
+
             echo "SSL_SUBJECT=Certificate unavailable" >> "$GITHUB_ENV"
             echo "SSL_ISSUER=Unknown" >> "$GITHUB_ENV"
             echo "SSL_EXPIRY=Unknown" >> "$GITHUB_ENV"
             echo "SSL_NOT_BEFORE=Unknown" >> "$GITHUB_ENV"
+            echo "SSL_SERIAL=Unknown" >> "$GITHUB_ENV"
+
+            echo "SSL CHECK FAILED"
             exit 0
           fi
 
-          SUBJECT=$(openssl x509 -in "$CERT_FILE" -noout -subject | sed 's/^subject=//')
-          ISSUER=$(openssl x509 -in "$CERT_FILE" -noout -issuer | sed 's/^issuer=//')
-          EXPIRY=$(openssl x509 -in "$CERT_FILE" -noout -enddate | cut -d= -f2)
-          NOT_BEFORE=$(openssl x509 -in "$CERT_FILE" -noout -startdate | cut -d= -f2)
-          SERIAL=$(openssl x509 -in "$CERT_FILE" -noout -serial | cut -d= -f2)
+          # --------------------------------------------------------
+          # Read certificate information
+          # --------------------------------------------------------
+
+          SUBJECT=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -subject | sed 's/^subject=//')
+
+          ISSUER=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -issuer | sed 's/^issuer=//')
+
+          EXPIRY=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -enddate | cut -d= -f2)
+
+          NOT_BEFORE=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -startdate | cut -d= -f2)
+
+          SERIAL=$(openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -serial | cut -d= -f2)
 
           echo "SSL_SUBJECT=$SUBJECT" >> "$GITHUB_ENV"
           echo "SSL_ISSUER=$ISSUER" >> "$GITHUB_ENV"
@@ -48,40 +94,95 @@ jobs:
           echo "SSL_NOT_BEFORE=$NOT_BEFORE" >> "$GITHUB_ENV"
           echo "SSL_SERIAL=$SERIAL" >> "$GITHUB_ENV"
 
+          echo "Certificate Subject: $SUBJECT"
+          echo "Certificate Issuer: $ISSUER"
+          echo "Valid From: $NOT_BEFORE"
+          echo "Valid Until: $EXPIRY"
+          echo "Serial: $SERIAL"
+          echo ""
+
+          # --------------------------------------------------------
           # Check certificate expiry
-          if ! openssl x509 -in "$CERT_FILE" -noout -checkend 0 >/dev/null 2>&1; then
+          # --------------------------------------------------------
+
+          if ! openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -checkend 0 >/dev/null 2>&1; then
+
             echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
             echo "SSL_ALERT_TYPE=SSL Certificate Expired" >> "$GITHUB_ENV"
             echo "SSL_MESSAGE=The SSL certificate for ${DOMAIN} has expired." >> "$GITHUB_ENV"
+
+            echo "SSL CERTIFICATE EXPIRED"
             exit 0
           fi
 
+          # --------------------------------------------------------
           # Check hostname
-          if ! openssl x509 -in "$CERT_FILE" -noout -checkhost "$EXPECTED_DOMAIN" >/dev/null 2>&1; then
+          # --------------------------------------------------------
+
+          if ! openssl x509 \
+            -in "$CERT_FILE" \
+            -noout \
+            -checkhost "$EXPECTED_DOMAIN" >/dev/null 2>&1; then
+
             echo "SSL_CHECK_FAILED=true" >> "$GITHUB_ENV"
             echo "SSL_ALERT_TYPE=Wrong SSL Certificate" >> "$GITHUB_ENV"
             echo "SSL_MESSAGE=The certificate presented by ${DOMAIN} does not match ${EXPECTED_DOMAIN}." >> "$GITHUB_ENV"
+
+            echo "WRONG SSL CERTIFICATE"
             exit 0
           fi
+
+          # --------------------------------------------------------
+          # SSL is valid
+          # --------------------------------------------------------
 
           echo "SSL_CHECK_FAILED=false" >> "$GITHUB_ENV"
           echo "SSL_ALERT_TYPE=SSL Certificate OK" >> "$GITHUB_ENV"
           echo "SSL_MESSAGE=SSL certificate is valid and matches ${DOMAIN}." >> "$GITHUB_ENV"
 
-          echo "SSL certificate check completed successfully."
+          echo "=========================================="
+          echo "SSL CERTIFICATE OK"
+          echo "=========================================="
+
+          rm -f "$CERT_FILE"
+
+
+      # ============================================================
+      # 2. SEND EMAIL THROUGH EMAILJS
+      # ============================================================
+      #
+      # TEMPORARY TEST:
+      # Keep "if: always()" while testing EmailJS.
+      #
+      # AFTER EMAIL WORKS:
+      # Change it to:
+      #
+      # if: env.SSL_CHECK_FAILED == 'true'
+      #
+      # ============================================================
 
       - name: Send SSL Alert through EmailJS
         if: always()
         shell: bash
         run: |
-          curl --fail-with-body \
-            -X POST \
+
+          echo "=========================================="
+          echo "SENDING EMAIL THROUGH EMAILJS"
+          echo "=========================================="
+
+          RESPONSE=$(curl --silent --show-error \
+            --write-out "\nHTTP_STATUS:%{http_code}" \
+            --request POST \
             "https://api.emailjs.com/api/v1.0/email/send" \
-            -H "Content-Type: application/json" \
-            -d "$(jq -n \
+            --header "Content-Type: application/json" \
+            --data "$(jq -n \
               --arg service_id "${{ secrets.EMAILJS_SERVICE_ID }}" \
               --arg template_id "${{ secrets.EMAILJS_TEMPLATE_ID }}" \
               --arg user_id "${{ secrets.EMAILJS_PUBLIC_KEY }}" \
+              --arg accessToken "${{ secrets.EMAILJS_PRIVATE_KEY }}" \
               --arg domain "app.cmercury.com" \
               --arg server_ip "208.100.49.130" \
               --arg alert_type "${{ env.SSL_ALERT_TYPE }}" \
@@ -96,6 +197,7 @@ jobs:
                 service_id: $service_id,
                 template_id: $template_id,
                 user_id: $user_id,
+                accessToken: $accessToken,
                 template_params: {
                   domain: $domain,
                   server_ip: $server_ip,
@@ -108,6 +210,18 @@ jobs:
                   expected_hostname: $expected_hostname,
                   expected_certificate: $expected_certificate
                 }
-              }')"
+              }')")
 
-          echo "SSL alert email sent through EmailJS."
+          echo "$RESPONSE"
+
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+
+          echo ""
+          echo "HTTP Status: $HTTP_STATUS"
+
+          if [ "$HTTP_STATUS" != "200" ]; then
+            echo "EmailJS email sending FAILED."
+            exit 1
+          fi
+
+          echo "EmailJS email sent successfully."
